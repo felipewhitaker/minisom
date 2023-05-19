@@ -741,18 +741,18 @@ class MiniSom(object):
             print('Topology not understood. It should be rectangular or hexagonal')
 
 
-    def plot_umatrix(self, nrows = 1, ncols = 1, names = ['umatrix']):
+    def plot_umatrix(self, nrows = 1, ncols = 1, names = ['umatrix'], size=(15,15)):
 
         umatrix = self.distance_map()
         um = umatrix.reshape(umatrix.shape[0],umatrix.shape[1],1)
         
-        self.plot_map(nrows=nrows, ncols=ncols, feature_names = names, normalize_weights = True, um = True, um_val = um)
+        self.plot_map(nrows=nrows, ncols=ncols, feature_names = names, normalize_weights = True, um = True, um_val = um, size=size)
 
 
-    def plot_winning(self, map_items, alias_label=str, colorize=None, label_color = None):
+    def plot_winning(self, map_items, alias_label=str, colorize=None, label_color = None, size=(14, 14)):
 
         if self.topology == 'rectangular':
-            plt.figure(figsize=(14, 14))
+            plt.figure(figsize=size))
             for p, label in map_items.items():
                 label = list(label)
                 x = p[0] + .1
@@ -770,7 +770,7 @@ class MiniSom(object):
 
         elif self.topology == 'hexagonal':
             xx, yy = self.get_euclidean_coordinates()
-            f = plt.figure(figsize=(17,17))
+            f = plt.figure(figsize=size)
             
             ax = f.add_subplot(1, 1, 1)
 
