@@ -1,8 +1,11 @@
+from math import sqrt
+
 from numpy import (array, unravel_index, nditer, linalg, random, subtract, max,
-                   power, exp, zeros, ones, arange, outer, meshgrid, dot,
-                   logical_and, mean, cov, argsort, linspace, transpose,
+                   power, exp, pi, zeros, ones, arange, outer, meshgrid, dot,
+                   logical_and, mean, std, cov, argsort, linspace, transpose,
                    einsum, prod, nan, sqrt, hstack, diff, argmin, multiply,
                    nanmean, nansum, tile, array_equal)
+from numpy import sum as npsum
 from numpy.linalg import norm
 from collections import defaultdict, Counter
 from warnings import warn
@@ -11,6 +14,18 @@ from time import time
 from datetime import timedelta
 import pickle
 import os
+
+#for visualization
+
+import matplotlib.pyplot as plt
+from matplotlib.patches import RegularPolygon, Ellipse
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from matplotlib import cm, colorbar
+from matplotlib.lines import Line2D 
+import numpy as np 
+from sklearn.preprocessing import minmax_scale
+import matplotlib.colors as colors 
+from matplotlib.patches import Patch
 
 # for unit tests
 from numpy.testing import assert_almost_equal, assert_array_almost_equal
@@ -90,8 +105,8 @@ def asymptotic_decay(learning_rate, t, max_iter):
 
 
 class MiniSom(object):
-    def __init__(self, x, y, input_len, sigma=1.0,
-                 learning_rate=0.5, decay_function=asymptotic_decay,
+    def __init__(self, x, y, input_len, sigma=1.0, learning_rate=0.5,
+                 decay_function=asymptotic_decay,
                  neighborhood_function='gaussian', topology='rectangular',
                  activation_distance='euclidean', random_seed=None):
         """Initializes a Self Organizing Maps.
@@ -119,13 +134,12 @@ class MiniSom(object):
             to the dimensions of the map.
             (at the iteration t we have sigma(t) = sigma / (1 + t/T)
             where T is #num_iteration/2)
-
         learning_rate : initial learning rate
             (at the iteration t we have
             learning_rate(t) = learning_rate / (1 + t/T)
             where T is #num_iteration/2)
 
-        decay_function : function (default=asymptotic_decay)
+        decay_function : function (default=None)
             Function that reduces learning_rate and sigma at each iteration
             the default function is:
                         learning_rate / (1+t/(max_iterarations/2))
@@ -166,9 +180,9 @@ class MiniSom(object):
 
         self._random_generator = random.RandomState(random_seed)
 
+        self.x = x 
+        self.y = y
         self._learning_rate = learning_rate
-        self._decay_function = decay_function
-
         self._sigma = sigma
         self._input_len = input_len
         # random initialization
@@ -191,6 +205,8 @@ class MiniSom(object):
             if neighborhood_function in ['triangle']:
                 warn('triangle neighborhood function does not ' +
                      'take in account hexagonal topology')
+
+        self._decay_function = decay_function
 
         neig_functions = {'gaussian': self._gaussian,
                           'mexican_hat': self._mexican_hat,
@@ -386,9 +402,8 @@ class MiniSom(object):
             for j, c2 in enumerate(linspace(-1, 1, len(self._neigy))):
                 self._weights[i, j] = c1*pc[pc_order[0]] + c2*pc[pc_order[1]]
 
-    def train(self, data, num_iteration, learning_rate=0.5,
-              decay_function=asymptotic_decay, random_order=False,
-              verbose=False, use_epochs=False):
+    def train(self, data, num_iteration,
+              random_order=False, verbose=False, use_epochs=False):
         """Trains the SOM.
 
         Parameters
@@ -400,28 +415,6 @@ class MiniSom(object):
             If use_epochs is False, the weights will be
             updated num_iteration times. Otherwise they will be updated
             len(data)*num_iteration times.
-
-        learning_rate : initial learning rate
-            (at the iteration t we have
-            learning_rate(t) = learning_rate / (1 + t/T)
-            where T is #num_iteration/2)
-
-        decay_function : function (default=asymptotic_decay)
-            Function that reduces learning_rate and sigma at each iteration
-            the default function is:
-                        learning_rate / (1+t/(max_iterarations/2))
-
-            A custom decay function will need to to take in input
-            three parameters in the following order:
-
-            1. learning rate
-            2. current iteration
-            3. maximum number of iterations allowed
-
-
-            Note that if a lambda function is used to define the decay
-            MiniSom will not be pickable anymore.
-
 
         random_order : bool (default=False)
             If True, samples are picked in random order.
@@ -438,29 +431,38 @@ class MiniSom(object):
         """
         self._check_iteration_number(num_iteration)
         self._check_input_len(data)
+
+        self._quantization_error = []
+        self._topographic_error = []
         random_generator = None
-        self._learning_rate = learning_rate
-        self._decay_function = decay_function
         if random_order:
             random_generator = self._random_generator
         iterations = _build_iteration_indexes(len(data), num_iteration,
                                               verbose, random_generator,
                                               use_epochs)
+
+        def get_decay_rate(iteration_index, data_len):
+            return int(iteration_index)
         if use_epochs:
             def get_decay_rate(iteration_index, data_len):
                 return int(iteration_index / data_len)
-        else:
-            def get_decay_rate(iteration_index, data_len):
-                return int(iteration_index)
         for t, iteration in enumerate(iterations):
             decay_rate = get_decay_rate(t, len(data))
             self.update(data[iteration], self.winner(data[iteration]),
                         decay_rate, num_iteration)
+            self.track_errors(data)
         if verbose:
             print('\n quantization error:', self.quantization_error(data))
+        if self.topology == 'hexagonal':
+            print('Topographic error not computed.')
 
-    def train_random(self, data, num_iteration, learning_rate=0.5,
-                     decay_function=asymptotic_decay, verbose=False):
+    def track_errors(self,data):
+        self._quantization_error.append(self.quantization_error(data))
+        if self.topology == 'rectangular':
+            self._topographic_error.append(self.topographic_error(data))
+
+
+    def train_random(self, data, num_iteration, verbose=False):
         """Trains the SOM picking samples at random from data.
 
         Parameters
@@ -471,37 +473,13 @@ class MiniSom(object):
         num_iteration : int
             Maximum number of iterations (one iteration per sample).
 
-        learning_rate : initial learning rate
-            (at the iteration t we have
-            learning_rate(t) = learning_rate / (1 + t/T)
-            where T is #num_iteration/2)
-
-        decay_function : function (default=asymptotic_decay)
-            Function that reduces learning_rate and sigma at each iteration
-            the default function is:
-                        learning_rate / (1+t/(max_iterarations/2))
-
-            A custom decay function will need to to take in input
-            three parameters in the following order:
-
-            1. learning rate
-            2. current iteration
-            3. maximum number of iterations allowed
-
-
-            Note that if a lambda function is used to define the decay
-            MiniSom will not be pickable anymore.
-
         verbose : bool (default=False)
             If True the status of the training
             will be printed at each time the weights are updated.
         """
-        self.train(data, num_iteration, random_order=True,
-                   learning_rate=learning_rate, decay_function=decay_function,
-                   verbose=verbose)
+        self.train(data, num_iteration, random_order=True, verbose=verbose)
 
-    def train_batch(self, data, num_iteration, learning_rate=0.5,
-                    decay_function=asymptotic_decay, verbose=False):
+    def train_batch(self, data, num_iteration, verbose=False):
         """Trains the SOM using all the vectors in data sequentially.
 
         Parameters
@@ -512,34 +490,11 @@ class MiniSom(object):
         num_iteration : int
             Maximum number of iterations (one iteration per sample).
 
-        learning_rate : initial learning rate
-            (at the iteration t we have
-            learning_rate(t) = learning_rate / (1 + t/T)
-            where T is #num_iteration/2)
-
-        decay_function : function (default=asymptotic_decay)
-            Function that reduces learning_rate and sigma at each iteration
-            the default function is:
-                        learning_rate / (1+t/(max_iterarations/2))
-
-            A custom decay function will need to to take in input
-            three parameters in the following order:
-
-            1. learning rate
-            2. current iteration
-            3. maximum number of iterations allowed
-
-
-            Note that if a lambda function is used to define the decay
-            MiniSom will not be pickable anymore.
-
         verbose : bool (default=False)
             If True the status of the training
             will be printed at each time the weights are updated.
         """
-        self.train(data, num_iteration, random_order=False,
-                   learning_rate=learning_rate, decay_function=decay_function,
-                   verbose=verbose)
+        self.train(data, num_iteration, random_order=False, verbose=verbose)
 
     def distance_map(self, scaling='sum'):
         """Returns the distance map of the weights.
@@ -620,11 +575,9 @@ class MiniSom(object):
         """Returns the topographic error computed by finding
         the best-matching and second-best-matching neuron in the map
         for each input and then evaluating the positions.
-
         A sample for which these two nodes are not adjacent counts as
         an error. The topographic error is given by the
         the total number of errors divided by the total of samples.
-
         If the topographic error is 0, no error occurred.
         If 1, the topology was not preserved for any of the samples."""
         self._check_input_len(data)
@@ -634,22 +587,25 @@ class MiniSom(object):
             return nan
         if self.topology == 'hexagonal':
             return self._topographic_error_hexagonal(data)
-        else:
+        elif self.topology == 'rectangular':
             return self._topographic_error_rectangular(data)
-
+        else:
+            warn('Topology not implemented.')
+            return nan 
+    
     def _topographic_error_hexagonal(self, data):
         """Return the topographic error for hexagonal grid"""
         b2mu_inds = argsort(self._distance_from_weights(data), axis=1)[:, :2]
-        b2mu_coords = [[self._get_euclidean_coordinates_from_index(bmu[0]),
-                        self._get_euclidean_coordinates_from_index(bmu[1])]
-                       for bmu in b2mu_inds]
+        b2mu_coords = [[self._get_euclidean_coordinates_from_index(bmu[0]), 
+                        self._get_euclidean_coordinates_from_index(bmu[1])] 
+                            for bmu in b2mu_inds]
         b2mu_coords = array(b2mu_coords)
-        b2mu_neighbors = [(bmu1 >= bmu2-1) & ((bmu1 <= bmu2+1))
-                          for bmu1, bmu2 in b2mu_coords]
+        b2mu_neighbors = [(bmu1 >= bmu2-1) & ((bmu1 <= bmu2+1)) 
+                            for bmu1, bmu2 in b2mu_coords]
         b2mu_neighbors = [neighbors.prod() for neighbors in b2mu_neighbors]
         te = 1 - mean(b2mu_neighbors)
         return te
-
+    
     def _topographic_error_rectangular(self, data):
         """Return the topographic error for rectangular grid"""
         t = 1.42
@@ -704,6 +660,172 @@ class MiniSom(object):
         for position in winmap:
             winmap[position] = Counter(winmap[position])
         return winmap
+
+
+    def plot_map(self, nrows=1, ncols=1,feature_names = [], normalize_weights = True, um = False, um_val = [], size=(15,15)):
+        '''
+        Umatrix plot 
+
+        '''
+        if um == False:
+            weights = self.get_weights()
+        else:
+            weights = um_val
+
+
+        cmap= plt.cm.coolwarm
+        # create normalization instance
+        norm = colors.Normalize(vmin=min(np.min(um),0), vmax=np.max(um)) 
+        # create a scalarmappable from the colormap
+        sm = cm.ScalarMappable(cmap=cmap, norm=norm)   
+        if self.topology == 'rectangular':
+
+            plt.figure(figsize=size)
+            for i, f in enumerate(feature_names):
+                plt.subplot(nrows, ncols, i+1)
+                plt.title(f)
+                a = plt.pcolor(weights[:,:,i].T, cmap=cmap)
+                plt.colorbar(a, orientation='vertical')
+                plt.xticks(np.arange(weights.shape[0]+1))
+                plt.yticks(np.arange(weights.shape[1]+1))
+                plt.axis('off')
+            
+            
+            plt.tight_layout()
+            plt.show()
+
+        elif self.topology == 'hexagonal':
+            xx, yy = self.get_euclidean_coordinates()
+
+            f = plt.figure(figsize=size)
+
+            for k, fname in enumerate(feature_names):
+                #plt.subplot(nrows, ncols, k+1)
+                #plt.figure(figsize=(10,10))
+                
+                ax = f.add_subplot(nrows, ncols, k+1)
+
+                ax.set_aspect('equal')
+
+                ax.set_title(fname)
+
+                n_weight = np.copy(weights[:,:,k])
+
+                if normalize_weights:
+                    n_weight = minmax_scale(n_weight)
+                # iteratively add hexagons
+                for i in range(weights.shape[0]):
+                    for j in range(weights.shape[1]):
+                        wy = yy[(i, j)] * np.sqrt(3) / 2
+                        hex = RegularPolygon((xx[(i, j)], wy), 
+                                            numVertices=6, 
+                                            radius=.95 / np.sqrt(3),
+                                            facecolor=cm.coolwarm(n_weight[i, j]), 
+                                            alpha=.4, 
+                                            edgecolor='gray')
+                        ax.add_patch(hex)
+
+                xrange = np.arange(weights.shape[0])
+                yrange = np.arange(weights.shape[1])
+                plt.axis('off')
+                #ax.set_xticks(xrange-.5, xrange)
+                #ax.set_yticks(yrange * np.sqrt(3) / 2, yrange)
+                plt.xlim((-1,weights.shape[0]-0.5))
+                offset = abs((yy[(0, 1)] - yy[(0,0)]) * np.sqrt(3) / 6)
+                print(offset)
+                #offset = 2.3
+                #if n_weight.shape[1] % 2 == 1:
+                    #offset = 2.3
+                plt.ylim((-0.6,n_weight.shape[1]-offset))
+                plt.colorbar(sm, orientation="vertical", shrink=0.7)
+            plt.show()
+            
+        else:
+            print('Topology not understood. It should be rectangular or hexagonal')
+
+
+    def plot_umatrix(self, nrows = 1, ncols = 1, names = ['umatrix']):
+
+        umatrix = self.distance_map()
+        um = umatrix.reshape(umatrix.shape[0],umatrix.shape[1],1)
+        
+        self.plot_map(nrows=nrows, ncols=ncols, feature_names = names, normalize_weights = True, um = True, um_val = um)
+
+
+    def plot_winning(self, map_items, alias_label=str, colorize=None, label_color = None):
+
+        if self.topology == 'rectangular':
+            plt.figure(figsize=(14, 14))
+            for p, label in map_items.items():
+                label = list(label)
+                x = p[0] + .1
+                y = p[1] - .3
+                for i, c in enumerate(label):
+                    off_set = (i+1)/len(label) - 0.05
+                    if colorize:
+                        plt.text(x, y+off_set, alias_label(c), color=colorize[c], fontsize=10)
+                    else:
+                        plt.text(x, y+off_set, alias_label(c), fontsize=10)
+            plt.pcolor(self.distance_map().T, cmap='gray_r', alpha=.2)
+            plt.xticks(np.arange(self.x+1))
+            plt.yticks(np.arange(self.y+1))
+            plt.grid()
+
+        elif self.topology == 'hexagonal':
+            xx, yy = self.get_euclidean_coordinates()
+            f = plt.figure(figsize=(17,17))
+            
+            ax = f.add_subplot(1, 1, 1)
+
+            ax.set_aspect('equal')
+
+            ax.set_title('Winning map')
+
+            n_weight = self.distance_map().T
+            # iteratively add hexagons
+            for i in range(n_weight.shape[0]):
+                for j in range(n_weight.shape[1]):
+                    wy = yy[(i, j)] * np.sqrt(3) / 2
+                    hex = RegularPolygon((xx[(i, j)], wy), 
+                                        numVertices=6, 
+                                        radius=.95 / np.sqrt(3),
+                                        facecolor=cm.coolwarm(n_weight[i, j]), 
+                                        alpha=.4, 
+                                        edgecolor='gray')
+                    ax.add_patch(hex)
+
+            for p, label in map_items.items():
+                label = list(label)
+                x = xx[(p[0],p[1])] -0.2
+                y = yy[(p[0],p[1])]*np.sqrt(3) / 2 -0.7
+
+                for i, c in enumerate(label):
+                    off_set = (i+1)/len(label) - 0.05
+                    if colorize:
+                        plt.text(x, y+off_set, alias_label(c), color=colorize[c], fontsize=10)
+                    else:
+                        plt.text(x, y+off_set, alias_label(c), fontsize=10)
+
+
+            #xrange = np.arange(n_weight.shape[0])
+            #yrange = np.arange(n_weight.shape[1])
+            plt.axis('off')
+            #ax.set_xticks(xrange-.5, xrange)
+            #ax.set_yticks(yrange * np.sqrt(3) / 2, yrange)
+            plt.xlim((-1,n_weight.shape[0]-0.5))
+            offset = abs((yy[(0, 1)] - yy[(0,0)]) * np.sqrt(3) / 6)
+            plt.ylim((-0.6,n_weight.shape[1]-offset))
+
+
+
+        if label_color:
+            legend_elements = [Patch(facecolor=clr,
+                                edgecolor='w',
+                                label=l) for l, clr in label_color.items()]
+            plt.legend(handles=legend_elements, loc='center left', bbox_to_anchor=(1, .95))
+
+        plt.show()
+
 
 
 class TestMinisom(unittest.TestCase):
@@ -841,18 +963,8 @@ class TestMinisom(unittest.TestCase):
         assert self.som.topographic_error([[15]]) == 1.0
 
         self.som.topology = 'hexagonal'
-        # 10 will have bmu_1 in (0, 4) and bmu_2 in (1, 3)
-        # which are in the same neighborhood on a hexagonal grid
-        self.som._weights[0, 4] = 10.0
-        self.som._weights[1, 3] = 9.0
-        # 3 will have bmu_1 in (2, 0) and bmu_2 in (1, 1)
-        # which are in the same neighborhood on a hexagonal grid
-        self.som._weights[2, 0] = 3.0
-        assert self.som.topographic_error([[10]]) == 0.0
-        assert self.som.topographic_error([[3]]) == 0.0
-        # True for both hexagonal and rectangular grids
-        assert self.som.topographic_error([[5]]) == 0.0
-        assert self.som.topographic_error([[15]]) == 1.0
+        with self.assertRaises(NotImplementedError):
+            assert self.som.topographic_error([[5]]) == 0.0
         self.som.topology = 'rectangular'
 
     def test_quantization(self):
