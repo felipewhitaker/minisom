@@ -453,13 +453,10 @@ class MiniSom(object):
             self.track_errors(data)
         if verbose:
             print('\n quantization error:', self.quantization_error(data))
-        if self.topology == 'hexagonal':
-            print('Topographic error not computed.')
-
+        
     def track_errors(self,data):
         self._quantization_error.append(self.quantization_error(data))
-        if self.topology == 'rectangular':
-            self._topographic_error.append(self.topographic_error(data))
+        self._topographic_error.append(self.topographic_error(data))
 
 
     def train_random(self, data, num_iteration, verbose=False):
