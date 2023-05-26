@@ -752,7 +752,7 @@ class MiniSom(object):
     def plot_winning(self, map_items, alias_label=str, colorize=None, label_color = None, size=(14, 14)):
 
         if self.topology == 'rectangular':
-            plt.figure(figsize=size))
+            plt.figure(figsize=size)
             for p, label in map_items.items():
                 label = list(label)
                 x = p[0] + .1
